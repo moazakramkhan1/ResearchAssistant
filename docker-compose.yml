@@ -1,0 +1,118 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: research
+    volumes:
+      - ./data/db:/var/lib/postgresql/data
+    networks: [ internal ]
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      STORAGE_DIR: ${STORAGE_DIR}
+      GROBID_URL: ${GROBID_URL}
+      OLLAMA_URL: ${OLLAMA_URL}
+      N8N_INGEST_SECRET: ${N8N_INGEST_SECRET}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+    volumes:
+      - ./data/uploads:/data/uploads
+    depends_on:
+      - db
+      - grobid
+      - ollama
+    ports:
+      - "8000:8000"
+    networks: [ internal, public ]
+
+  frontend:
+    build: ./frontend
+    environment:
+      VITE_API_BASE: http://localhost:8000
+    depends_on: [ backend ]
+    ports:
+      - "5173:5173"
+    networks: [ public ]
+
+  n8n:
+    image: n8nio/n8n:latest
+    environment:
+      N8N_BASIC_AUTH_ACTIVE: ${N8N_BASIC_AUTH_ACTIVE}
+      N8N_BASIC_AUTH_USER: ${N8N_BASIC_AUTH_USER}
+      N8N_BASIC_AUTH_PASSWORD: ${N8N_BASIC_AUTH_PASSWORD}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+      N8N_HOST: ${N8N_HOST}
+      N8N_PORT: ${N8N_PORT}
+    volumes:
+      - ./data/n8n:/home/node/.n8n
+      - ./data/uploads:/data/uploads
+    depends_on:
+      grobid:
+        condition: service_started
+      backend:
+        condition: service_started
+      ollama:
+        condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
+    ports:
+      - "5678:5678"
+    networks: [ internal ]
+
+  grobid:
+    image: lfoppiano/grobid:0.7.3
+    environment:
+      GROBID_OPT: "--max.memory=2G"
+    networks: [ internal ]
+
+  # --- Ollama server (just serves the API) ---
+  ollama:
+    image: ollama/ollama:latest
+    environment:
+      OLLAMA_HOST: 0.0.0.0
+    command: [ "serve" ]
+    volumes:
+      - ./data/ollama:/root/.ollama
+    # Map the port so you can also hit it from host if you want
+    ports:
+      - "11434:11434"
+    healthcheck:
+      # Cross-platform healthcheck that works on the base image
+      test: [ "CMD-SHELL", "ollama list >/dev/null 2>&1" ]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+      start_period: 5s
+    networks: [ internal ]
+  # --- One-shot init job to pull models into the server ---
+  ollama-init:
+    image: curlimages/curl:8.9.1
+    environment:
+      O_HOST: http://ollama:11434
+      O_MODELS: ${OLLAMA_MODELS:-llama3.2:3b-instruct-q4_K_M}
+    depends_on:
+      ollama:
+        condition: service_started
+    command: >
+      sh -lc '
+        echo "Waiting for Ollama API at $$O_HOST ...";
+        until curl -sf "$$O_HOST/api/tags" >/dev/null; do sleep 1; done;
+        for m in $$O_MODELS; do
+          echo "Requesting server to pull: $$m";
+          curl -sS -X POST "$$O_HOST/api/pull" \
+              -H "Content-Type: application/json" \
+              -d "{\"name\":\"$$m\"}" | sed -n "1,120p";
+        done
+        echo "Model pre-pull complete."
+      '
+    restart: "no"
+    networks: [ internal ]
+
+networks:
+  internal: {}
+  public: {}

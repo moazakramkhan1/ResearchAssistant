@@ -1,0 +1,271 @@
+{
+  "name": "PDF → Metadata + Summary (no-code, no manual tweaks)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "paper-uploaded",
+        "responseMode": "onReceived"
+      },
+      "id": "Webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        220,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "keepOnlySet": true,
+        "values": {
+          "string": [
+            {
+              "name": "paper_id",
+              "value": "={{ $json['paper_id'] || ($json['body'] ? $json['body']['paper_id'] : '') }}"
+            },
+            {
+              "name": "backend_url",
+              "value": "http://backend:8000"
+            },
+            {
+              "name": "grobid_url",
+              "value": "http://grobid:8070"
+            },
+            {
+              "name": "ollama_url",
+              "value": "http://ollama:11434"
+            },
+            {
+              "name": "secret",
+              "value": "={{ $json['headers'] && $json['headers']['x-n8n-secret'] ? $json['headers']['x-n8n-secret'] : ($json['x-n8n-secret'] || '') }}"
+            }
+          ]
+        },
+        "options": {
+          "dotNotation": true
+        }
+      },
+      "id": "Init (Set)",
+      "name": "Init (Set)",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [
+        460,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "none",
+        "method": "POST",
+        "url": "={{$node['Init (Set)'].json['backend_url']}}/api/internal/grobid-fulltext",
+        "jsonParameters": true,
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"paper_id\": $node['Init (Set)'].json['paper_id'] } }}",
+        "sendHeaders": true,
+        "headerParameters": [
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "options": {
+          "timeout": 300000,
+          "responseFormat": "json",
+          "bodyContentType": "json"
+        }
+      },
+      "id": "Backend GROBID fulltext",
+      "name": "Backend GROBID fulltext",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        720,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "none",
+        "method": "POST",
+        "url": "={{$node['Init (Set)'].json['backend_url']}}/api/internal/tei-parse",
+        "jsonParameters": true,
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"tei_xml\": $json['tei_xml'] } }}",
+        "sendHeaders": true,
+        "headerParameters": [
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "options": {
+          "timeout": 120000,
+          "responseFormat": "json",
+          "bodyContentType": "json"
+        }
+      },
+      "id": "Backend TEI parse",
+      "name": "Backend TEI parse",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        980,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "none",
+        "method": "POST",
+        "url": "={{$node['Init (Set)'].json['ollama_url']}}/api/generate",
+        "jsonParameters": true,
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { model: 'llama3.2:3b-instruct-q4_K_M', stream: false, format: 'json', options: { temperature: 0, top_k: 1, top_p: 0.1, num_ctx: 1024, num_predict: 256 }, system: 'You output ONLY valid, minified JSON. No commentary, no markdown, no backticks, no text outside {}.', prompt: 'Fill this JSON strictly with values derived from TITLE and ABSTRACT.\\n' + 'Return exactly this object and nothing else: {\\\"one_liner\\\":\\\"\\\",\\\"summary_150w\\\":\\\"\\\",\\\"keywords\\\":[\\\"\\\",\\\"\\\",\\\"\\\",\\\"\\\",\\\"\\\"]}\\n' + 'TITLE: ' + ( ($node['Backend TEI parse'].json['csl_json'] && $node['Backend TEI parse'].json['csl_json']['title']) ? $node['Backend TEI parse'].json['csl_json']['title'] : '' ) + '\\n' + 'ABSTRACT: ' + ( $node['Backend TEI parse'].json['abstract'] || '' ) } }}",
+        "sendHeaders": true,
+        "headerParameters": [
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "options": {
+          "timeout": 300000,
+          "responseFormat": "json",
+          "bodyContentType": "json"
+        }
+      },
+      "id": "Ollama generate",
+      "name": "Ollama generate",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1240,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "const raw = $json.response ?? '';\nlet text = typeof raw === 'string' ? raw : JSON.stringify(raw ?? {});\n\n// Extract the first balanced JSON object from any surrounding junk\nfunction extractFirstJson(str){\n  const start = str.indexOf('{');\n  if (start < 0) return null;\n  let depth = 0, inStr = false, esc = false;\n  for (let i = start; i < str.length; i++){\n    const ch = str[i];\n    if (inStr){\n      if (esc){ esc = false; }\n      else if (ch === '\\\\'){ esc = true; }\n      else if (ch === '\"'){ inStr = false; }\n    } else {\n      if (ch === '\"') inStr = true;\n      else if (ch === '{') depth++;\n      else if (ch === '}') { depth--; if (depth === 0) return str.slice(start, i+1); }\n    }\n  }\n  return null;\n}\n\nlet obj = {};\ntry {\n  const first = extractFirstJson(text) ?? text.trim();\n  obj = JSON.parse(first);\n} catch { obj = {}; }\n\nconst getStr = (...xs) => {\n  for (const x of xs){ if (typeof x === 'string' && x.trim()) return x.trim(); }\n  return '';\n};\n\nconst cleanSpaces = (s) => String(s || '').replace(/\\s+/g, ' ').trim();\nconst limitWords = (s, n) => {\n  const words = cleanSpaces(s).split(' ');\n  return words.length <= n ? cleanSpaces(s) : words.slice(0, n).join(' ');\n};\n\nlet one_liner = getStr(obj.one_line_takeaway, obj.one_liner, obj.takeaway, obj.title);\none_liner = cleanSpaces(one_liner).slice(0, 220); // cap chars to avoid rambles\n\nlet summary = getStr(obj.summary_150w, obj.summary, obj.abstract);\nsummary = limitWords(summary, 150); // hard cap ~150 words\n\nlet keywords = obj.keywords ?? obj.tags ?? obj.keyphrases ?? [];\nif (typeof keywords === 'string') keywords = keywords.split(/[,;]\\s*/);\nif (!Array.isArray(keywords)) keywords = [];\nkeywords = keywords.map(k => cleanSpaces(k)).filter(Boolean);\n// dedupe case-insensitive, keep order, max 5\nconst seen = new Set();\nkeywords = keywords.filter(k => { const key = k.toLowerCase(); if (seen.has(key)) return false; seen.add(key); return true; }).slice(0,5);\n\nreturn { one_liner, summary_150w: summary, keywords };"
+      },
+      "id": "Parse Ollama JSON",
+      "name": "Parse Ollama JSON",
+      "type": "n8n-nodes-base.functionItem",
+      "typeVersion": 1,
+      "position": [
+        1380,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "none",
+        "method": "POST",
+        "url": "={{$node['Init (Set)'].json['backend_url']}}/api/hooks/n8n/ingest",
+        "jsonParameters": true,
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { paper_id: $node['Init (Set)'].json['paper_id'], csl_json: $node['Backend TEI parse'].json['csl_json'], one_liner: $node['Parse Ollama JSON'].json['one_liner'], summary_150w: $node['Parse Ollama JSON'].json['summary_150w'], keywords: $node['Parse Ollama JSON'].json['keywords'] } }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "x-n8n-secret",
+              "value": "={{$node['Init (Set)'].json['secret'] || 'your-secret-here-change-in-production'}}"
+            }
+          ]
+        },
+        "options": {
+          "responseFormat": "json",
+          "bodyContentType": "json"
+        }
+      },
+      "id": "Ingest Backend",
+      "name": "Ingest Backend",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1660,
+        220
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Init (Set)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Init (Set)": {
+      "main": [
+        [
+          {
+            "node": "Backend GROBID fulltext",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Backend GROBID fulltext": {
+      "main": [
+        [
+          {
+            "node": "Backend TEI parse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Backend TEI parse": {
+      "main": [
+        [
+          {
+            "node": "Ollama generate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ollama generate": {
+      "main": [
+        [
+          {
+            "node": "Parse Ollama JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Ollama JSON": {
+      "main": [
+        [
+          {
+            "node": "Ingest Backend",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false
+}
