@@ -143,10 +143,17 @@ docker compose down -v
 rm -rf data/db data/uploads data/ollama data/n8n
 docker compose up -d --build
 
-## Demo
+<h2 id="demo">Demo</h2>
 
-[▶ Watch the Loom demo](https://www.loom.com/share/bb6305a288644cea8625f882c0aabe85?sid=61ed08e6-e65e-4896-b1b3-f31ae797960b)
+<p><a href="https://www.loom.com/share/bb6305a288644cea8625f882c0aabe85?sid=61ed08e6-e65e-4896-b1b3-f31ae797960b" target="_blank" rel="noopener">
+  ▶ Watch the Loom demo
+</a></p>
 
-[![App screenshot](https://github.com/user-attachments/assets/6fba37ab-c5c4-48cd-8716-e93636b87724)](https://www.loom.com/share/bb6305a288644cea8625f882c0aabe85?sid=61ed08e6-e65e-4896-b1b3-f31ae797960b)
+<p>
+  <a href="https://www.loom.com/share/bb6305a288644cea8625f882c0aabe85?sid=61ed08e6-e65e-4896-b1b3-f31ae797960b">
+    <img src="https://github.com/user-attachments/assets/6fba37ab-c5c4-48cd-8716-e93636b87724" alt="App screenshot" width="900">
+  </a>
+</p>
+
 
 
