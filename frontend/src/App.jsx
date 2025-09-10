@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import axios from "axios";
 
 const API = import.meta.env.VITE_API_BASE || "http://localhost:8000";
@@ -10,20 +10,23 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
   const [deletingId, setDeletingId] = useState("");
-  const [refreshing, setRefreshing] = useState(false); // NEW: UI state for the Refresh button
 
-  // --- REFRESH (now supports background "silent" refresh) ---
+  const fileInputRef = useRef(null);
+
+  // ---- REFRESH (supports silent background refresh) ----
   const refresh = async (opts = { silent: false }) => {
     const silent = !!opts.silent;
     try {
-      if (!silent) setRefreshing(true);
+      if (!silent) {
+        // no spinner UI now (we removed Refresh button), so nothing to set
+      }
       const r = await axios.get(`${API}/api/papers`);
       const items = r.data.items || [];
       setPapers(items);
 
-      // If a paper is open, refresh its details when status/updated_at changed
+      // If a paper drawer is open, refresh its details if status/updated_at changed
       if (selected?.id) {
-        const row = items.find(p => p.id === selected.id);
+        const row = items.find((p) => p.id === selected.id);
         if (row) {
           const changed =
             row.status !== selected.status ||
@@ -32,10 +35,12 @@ export default function App() {
             try {
               const r2 = await axios.get(`${API}/api/papers/${selected.id}`);
               setSelected(r2.data);
-            } catch (_) { /* ignore detail fetch errors in silent refresh */ }
+            } catch {
+              /* ignore */
+            }
           }
         } else {
-          // It might have been deleted elsewhere
+          // It might have been deleted
           setSelected(null);
         }
       }
@@ -43,12 +48,14 @@ export default function App() {
     } catch (e) {
       if (!silent) setErr(e?.message || "Failed to load");
       return [];
-    } finally {
-      if (!silent) setRefreshing(false);
     }
   };
 
-  useEffect(() => { refresh(); }, []);
+  // initial load
+  useEffect(() => {
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const onUpload = async (e) => {
     e.preventDefault();
@@ -61,13 +68,17 @@ export default function App() {
       await axios.post(`${API}/api/upload`, form, {
         headers: { "Content-Type": "multipart/form-data" },
       });
+
+      // Clear file state and the input element so user can re-select (even same file)
       setFile(null);
-      // light polling after an upload to pick up processing→ready
+      if (fileInputRef.current) fileInputRef.current.value = "";
+
+      // Light polling after upload to pick up processing → ready
       let tries = 0;
       const t = setInterval(async () => {
         tries++;
         const items = await refresh({ silent: true });
-        const anyProcessing = items.some(p => p.status === "processing");
+        const anyProcessing = items.some((p) => p.status === "processing");
         if (!anyProcessing || tries > 10) clearInterval(t);
       }, 2000);
     } catch (e) {
@@ -105,9 +116,12 @@ export default function App() {
   };
 
   const fmtAuthors = (a = []) =>
-    a.map(x => `${x.given || ""} ${x.family || ""}`.trim()).filter(Boolean).join(", ");
+    a
+      .map((x) => `${x.given || ""} ${x.family || ""}`.trim())
+      .filter(Boolean)
+      .join(", ");
 
-  // Close on Esc (UI only)
+  // Close drawer on Esc
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === "Escape" && selected) setSelected(null);
@@ -116,23 +130,26 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [selected]);
 
-  // --- BACKGROUND AUTO-POLLING while any item is "processing" ---
+  // ---- BACKGROUND AUTO-POLLING while any item is "processing" ----
   useEffect(() => {
-    const hasProcessing = papers.some(p => p.status === "processing");
+    const hasProcessing = papers.some((p) => p.status === "processing");
     if (!hasProcessing) return;
 
     const iv = setInterval(() => {
       if (!document.hidden) refresh({ silent: true });
     }, 2000);
 
-    const onVis = () => { if (!document.hidden) refresh({ silent: true }); };
+    const onVis = () => {
+      if (!document.hidden) refresh({ silent: true });
+    };
     document.addEventListener("visibilitychange", onVis);
 
     return () => {
       clearInterval(iv);
       document.removeEventListener("visibilitychange", onVis);
     };
-  }, [papers]); // re-evaluates when list changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [papers]);
 
   return (
     <div className="app-root">
@@ -202,23 +219,28 @@ export default function App() {
       `}</style>
 
       <header className="app-header">
-        <div className="container" style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <div
+          className="container"
+          style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}
+        >
           <div className="brand">
             <div className="logo" />
-            <h1 style={{margin:0, fontSize:20, letterSpacing:.3}}>Research Assistant</h1>
+            <h1 style={{ margin: 0, fontSize: 20, letterSpacing: 0.3 }}>Research Assistant</h1>
           </div>
           <div className="tagline">Local · Private · Fast</div>
         </div>
       </header>
 
-      <main className="container" style={{padding:"22px 20px"}}>
+      <main className="container" style={{ padding: "22px 20px" }}>
         <div className="toolbar">
           <div className="filebox">
-            <input type="file" accept="application/pdf" onChange={(e)=>setFile(e.target.files?.[0])} />
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="application/pdf"
+              onChange={(e) => setFile(e.target.files?.[0] || null)}
+            />
           </div>
-          <button className="btn btn-primary" onClick={() => refresh()} disabled={refreshing}>
-            {refreshing ? "Refreshing..." : "Refresh"}
-          </button>
           <button className="btn btn-secondary" onClick={onUpload} disabled={loading || !file}>
             {loading ? "Uploading..." : "Upload"}
           </button>
@@ -230,27 +252,43 @@ export default function App() {
           {/* List */}
           <div className="card">
             <div className="card-head">
-              <div style={{fontWeight:800, color:"#cfe1ff"}}>Papers</div>
+              <div style={{ fontWeight: 800, color: "#cfe1ff" }}>Papers</div>
               <div className="badge">{papers.length} items</div>
             </div>
             <div className="list">
-              {papers.map(p => (
+              {papers.map((p) => (
                 <div key={p.id} className="row" onClick={() => openDetail(p.id)}>
                   <div>
-                    <div style={{color:"#e8ecff", fontWeight:600, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>
+                    <div
+                      style={{
+                        color: "#e8ecff",
+                        fontWeight: 600,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
                       {p.filename}
                     </div>
-                    <div className="muted" style={{fontSize:12}}>
-                      {p.id.slice(0,8)} · {new Date(p.created_at).toLocaleString()}
+                    <div className="muted" style={{ fontSize: 12 }}>
+                      {p.id.slice(0, 8)} · {new Date(p.created_at).toLocaleString()}
                     </div>
                   </div>
-                  <div className={`status ${p.status === "processing" ? "proc" : "ok"}`}>{p.status}</div>
-                  <div className="muted" style={{fontSize:12}}>Open</div>
+                  <div className={`status ${p.status === "processing" ? "proc" : "ok"}`}>
+                    {p.status}
+                  </div>
+                  <div className="muted" style={{ fontSize: 12 }}>
+                    Open
+                  </div>
+                  {/* delete button (stop row click) */}
                   <button
                     className="icon-btn danger"
                     title={deletingId === p.id ? "Deleting..." : "Delete"}
                     aria-label="Delete"
-                    onClick={(e) => { e.stopPropagation(); deletePaper(p.id); }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deletePaper(p.id);
+                    }}
                     disabled={!!deletingId}
                   >
                     {deletingId === p.id ? "…" : "🗑"}
@@ -264,19 +302,30 @@ export default function App() {
           {selected && (
             <div
               className="drawer"
-              onClick={(e) => { if (e.target === e.currentTarget) setSelected(null); }}
+              onClick={(e) => {
+                if (e.target === e.currentTarget) setSelected(null);
+              }}
             >
-              <div className="card" onClick={(e)=>e.stopPropagation()}>
+              <div className="card" onClick={(e) => e.stopPropagation()}>
                 <div className="card-head">
-                  <div style={{minWidth:0}}>
-                    <div style={{fontSize:18, fontWeight:900, color:"#e8ecff", lineHeight:1.25, overflow:"hidden", textOverflow:"ellipsis"}}>
+                  <div style={{ minWidth: 0 }}>
+                    <div
+                      style={{
+                        fontSize: 18,
+                        fontWeight: 900,
+                        color: "#e8ecff",
+                        lineHeight: 1.25,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                      }}
+                    >
                       {selected?.csl_json?.title || selected.filename}
                     </div>
-                    <div className="muted" style={{marginTop:6, fontSize:13}}>
+                    <div className="muted" style={{ marginTop: 6, fontSize: 13 }}>
                       Authors: {fmtAuthors(selected?.csl_json?.author)}
                     </div>
                   </div>
-                  <div style={{display:"flex", gap:8}}>
+                  <div style={{ display: "flex", gap: 8 }}>
                     <button
                       className="icon-btn danger"
                       aria-label="Delete"
@@ -298,28 +347,102 @@ export default function App() {
                 </div>
 
                 <div className="detail">
-                  <div><span className="label">Year:</span> {selected?.csl_json?.issued?.["date-parts"]?.[0]?.[0] || "-"}</div>
-                  <div><span className="label">One-liner:</span> <span style={{color:"#e8ecff"}}>{selected.one_liner || "-"}</span></div>
+                  <div>
+                    <span className="label">Year:</span>{" "}
+                    {selected?.csl_json?.issued?.["date-parts"]?.[0]?.[0] || "-"}
+                  </div>
+
+                  <div>
+                    <span className="label">One-liner:</span>{" "}
+                    <span style={{ color: "#e8ecff" }}>{selected.one_liner || "-"}</span>
+                  </div>
+
                   <div>
                     <span className="label">Summary:</span>
-                    <div style={{whiteSpace:"pre-wrap", marginTop:8, background:"var(--card)", border:"1px solid var(--line)", borderRadius:12, padding:"12px"}}>
+                    <div
+                      style={{
+                        whiteSpace: "pre-wrap",
+                        marginTop: 8,
+                        background: "var(--card)",
+                        border: "1px solid var(--line)",
+                        borderRadius: 12,
+                        padding: "12px",
+                      }}
+                    >
                       {selected.summary_150w || "-"}
                     </div>
                   </div>
+
                   <div>
                     <span className="label">Keywords:</span>
                     <div className="meta">
-                      {(selected.keywords || []).length
-                        ? (selected.keywords || []).map((k, i) => (
-                          <span key={i} className="badge" style={{borderColor:"var(--line-2)"}}>{k}</span>
+                      {(selected.keywords || []).length ? (
+                        (selected.keywords || []).map((k, i) => (
+                          <span key={i} className="badge" style={{ borderColor: "var(--line-2)" }}>
+                            {k}
+                          </span>
                         ))
-                        : <span className="muted">-</span>}
+                      ) : (
+                        <span className="muted">-</span>
+                      )}
                     </div>
                   </div>
-                  <div>
-                    <a className="link" href={`${API}/api/files/${selected.id}`} target="_blank" rel="noreferrer">
-                      Open PDF
-                    </a>
+
+                
+                  {/* References / Citations */}
+                  <div style={{ marginTop: 8 }}>
+                    <span className="label">References:</span>
+                    {Array.isArray(selected?.citations) && selected.citations.length ? (
+                      <div style={{ marginTop: 8, display: "grid", gap: 10 }}>
+                        {selected.citations.map((c, i) => {
+                          const authors = Array.isArray(c?.author)
+                            ? c.author
+                                .map((a) => [a?.given, a?.family].filter(Boolean).join(" "))
+                                .filter(Boolean)
+                                .join(", ")
+                            : "";
+                          const year = c?.issued?.["date-parts"]?.[0]?.[0] || "";
+                          const title = c?.title || "";
+                          const container = c?.["container-title"] || "";
+                          const doi = c?.DOI ? `https://doi.org/${c.DOI}` : null;
+                          const url = c?.URL || null;
+                          return (
+                            <div
+                              key={i}
+                              style={{
+                                background: "var(--card)",
+                                border: "1px solid var(--line)",
+                                borderRadius: 12,
+                                padding: "10px 12px",
+                              }}
+                            >
+                              <div style={{ color: "#e8ecff", fontWeight: 600 }}>
+                                {title || "(untitled)"}
+                              </div>
+                              <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                                {[authors, year, container].filter(Boolean).join(" · ")}
+                              </div>
+                              <div style={{ marginTop: 6, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                                {doi && (
+                                  <a className="link" href={doi} target="_blank" rel="noreferrer">
+                                    DOI
+                                  </a>
+                                )}
+                                {url && (
+                                  <a className="link" href={url} target="_blank" rel="noreferrer">
+                                    Link
+                                  </a>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="muted" style={{ marginTop: 8 }}>
+                        -
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
