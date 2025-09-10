@@ -145,9 +145,12 @@ docker compose up -d --build
 
 ## Demo
 
+## Demo
+
 ▶️ **Watch on Loom (direct):**  
 https://www.loom.com/share/bb6305a288644cea8625f882c0aabe85?sid=61ed08e6-e65e-4896-b1b3-f31ae797960b
 
 <!-- Clickable screenshot that opens the Loom video -->
 [![App screenshot](https://github.com/user-attachments/assets/6fba37ab-c5c4-48cd-8716-e93636b87724)](https://www.loom.com/share/bb6305a288644cea8625f882c0aabe85?sid=61ed08e6-e65e-4896-b1b3-f31ae797960b)
+
 
